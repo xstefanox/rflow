@@ -63,6 +63,8 @@ function list_remote_branches()
 ##
 function list_local_branches()
 {
+  local branch_type=$1
+
   git for-each-ref --format='%(refname)' refs/heads/${branch_type} | sed -e "s:^refs/heads/${branch_type}/::"
 }
 
@@ -77,6 +79,30 @@ function list_branches()
   { list_remote_branches ${branch_type}; list_local_branches ${branch_type}; } | sort -u
 }
 
+## check if a branch with the given name exists locally
+##
+## $1 the branch name
+##
+function local_branch_exists()
+{
+  local branch_type=$1
+  local branch=$2
+
+  list_local_branches ${branch_type} | grep -q ^${branch}$
+}
+
+## check if a branch with the given name exists on the remote
+##
+## $1 the branch name
+##
+function remote_branch_exists()
+{
+  local branch_type=$1
+  local branch=$2
+
+  list_remote_branches ${branch_type} | grep -q ^${branch}$
+}
+
 ## check if the given branch is a pipeline branch
 ##
 ## $1 the branch to check
@@ -88,22 +114,33 @@ function is_pipeline_branch()
   [[ ${branch} == ${PRODUCTION_BRANCH} || ${branch} == ${DEVELOPMENT_BRANCH} ]]
 }
 
+## check if the given branch is currently checked out
+##
+## $1 the branch to check
+##
+function is_current_branch()
+{
+  local branch=$1
+
+  [[ `git rev-parse --abbrev-ref HEAD` == "${branch}" ]]
+}
+
 ## normalize the given branch name by prepending the branch type name, if missing
 ##
 ## $1 the branch name to normalize
 ##
 function normalize_branch_name()
 {
-  local source_branch=$1
-  local target_branch_prefix=$2
+  local branch=$1
+  local branch_type=$2
 
-  if [[ "${source_branch#${target_branch_prefix}/}" == "${source_branch}" ]]
+  if [[ "${branch#${branch_type}/}" == "${branch}" ]]
   then
     # the branch name has been given with no prefix
-    source_branch=${target_branch_prefix}/${source_branch}
+    branch=${branch_type}/${branch}
   fi
 
-  echo ${source_branch}
+  echo ${branch}
 }
 
 ## validate the given branch merge operation by validating the user input
@@ -123,7 +160,7 @@ function branch_merge_validate()
 
   if [[ "${normalized_source_branch}" == "${source_branch}" ]]
   then
-    warning "avoid specifying the branch prefix '${target_branch_PREFIX}/'"
+    warning "avoid specifying the branch prefix '${branch_type}/'"
   fi
 
   [[ -z "${normalized_source_branch}" ]] && error "expecting branch name" && exit 1
@@ -154,7 +191,7 @@ function branch_merge()
 
   git checkout ${pipeline_branch} && \
   git rebase ${REMOTE}/${branch} && \
-  resync_branches ${branch_type} && \
+  rebase_all_branches ${branch_type} 'remote' && \
   info "deleting merged branch '${branch}'" && \
   git push --delete ${REMOTE} ${branch}
 }
@@ -163,13 +200,29 @@ function branch_merge()
 ##
 ## $1 the type of branches that will be rebased on their own pipeline branch
 ##
-function resync_branches()
+function rebase_all_branches()
 {
   local branch_type=$1
+  local remote_or_local=$2
   local branch
   local pipeline_branch=${PIPELINE["${branch_type}"]}
+  local list_fn
 
-  for branch in `list_remote_branches ${branch_type}`
+  # apply defaults
+  remote_or_local=${remote_or_local:-remote}
+
+  if [[ "${remote_or_local}" != 'remote' && "${remote_or_local}" != 'local' ]]
+  then
+    error "function ${FUNCNAME[0]}() excpects [remote|local] for arg \$2"
+    exit 1
+  fi
+
+  case "${remote_or_local}" in
+    'remote') list_fn=list_remote_branches ;;
+    'local') list_fn=list_local_branches ;;
+  esac
+
+  for branch in `${list_fn} ${branch_type}`
   do
     branch=${branch_type}/${branch}
 
@@ -179,13 +232,15 @@ function resync_branches()
     #  error "branch '${branch}' is not an ancestor of '${pipeline_branch}'"
     #fi
 
-    info "rebasing ${branch} on ${pipeline_branch}"
-    git checkout ${branch} && \
+
+    git checkout ${branch} &> /dev/null && \
+    info "updating '${branch}' with its remote" && \
+    git rebase ${REMOTE}/${pipeline_branch} && \
+    info "rebasing ${branch} on ${pipeline_branch}" && \
     git rebase ${pipeline_branch} && \
-    git push -f && \
-    git checkout ${pipeline_branch} && \
-    git branch -D $branch
-    sleep 1
+    git push --force &> /dev/null && \
+    git checkout ${pipeline_branch} &> /dev/null && \
+    git branch -D $branch &> /dev/null
   done
 }
 
@@ -203,6 +258,26 @@ function feature_merge()
   success "branch '${branch}' merged with '${DEVELOPMENT_BRANCH}'"
 }
 
+## update the production branch with commits from its remote
+##
+function rebase_production_branch()
+{
+  git checkout ${PRODUCTION_BRANCH} &> /dev/null && \
+  info "updating '${PRODUCTION_BRANCH}' with its remote" && \
+  git rebase ${REMOTE}/${PRODUCTION_BRANCH}
+}
+
+## update the development branch with commits from its remote and rebase on the production branch
+##
+function rebase_development_branch()
+{
+  git checkout ${DEVELOPMENT_BRANCH} &> /dev/null && \
+  info "updating '${DEVELOPMENT_BRANCH}' with its remote" && \
+  git rebase ${REMOTE}/${DEVELOPMENT_BRANCH} && \
+  info "rebasing development branch '${DEVELOPMENT_BRANCH}' production branch '${PRODUCTION_BRANCH}'" && \
+  git rebase ${PRODUCTION_BRANCH}
+}
+
 ## merge a hotfix branch into the production branch; this will recursively rebase the development branch on the
 ## production branch and all the feature branches on the latter
 ##
@@ -214,11 +289,8 @@ function hotfix_merge()
 
   branch_merge_validate ${branch} ${PRODUCTION_BRANCH} ${PRODUCTION_BRANCH_PREFIX} && \
   branch_merge `normalize_branch_name "${branch}" "${PRODUCTION_BRANCH_PREFIX}"` ${PRODUCTION_BRANCH_PREFIX} && \
-  info "rebasing ${DEVELOPMENT_BRANCH} on ${PRODUCTION_BRANCH}" && \
-  git checkout ${DEVELOPMENT_BRANCH} && \
-  git rebase ${REMOTE}/${DEVELOPMENT_BRANCH} && \
-  git rebase ${PRODUCTION_BRANCH} && \
-  resync_branches ${DEVELOPMENT_BRANCH_PREFIX} && \
+  rebase_development_branch && \
+  rebase_all_branches ${DEVELOPMENT_BRANCH_PREFIX} 'remote' && \
   success "branch '${branch}' merged with '${DEVELOPMENT_BRANCH}'"
 }
 
@@ -231,37 +303,100 @@ function branch_start()
 {
   local branch_type=$1
   local branch=$2
+  local normalized_branch=`normalize_branch_name "${branch}" "${branch_type}"`
 
-  if [[ -n `list_branches ${branch_type} | grep ^${branch}$` ]]
-  then
-    error 'a branch with this name already exists' && exit 1
-  fi
-
-  if ! echo "${branch}" | grep -e '^[a-z0-9][a-z0-9-]*[a-z0-9]$' | grep -v -e '-\{2,\}'
+  if ! echo "${branch}" | grep -e '^[a-z0-9][a-z0-9-]*[a-z0-9]$' | grep -q -v -e '-\{2,\}'
   then
     error 'invalid branch name (tip: use kebab case)' && exit 1
   fi
 
-  git checkout -b "${branch_type}/${branch}"
+  # check if the requested branch already exists
+  if [[ -n `list_branches ${branch_type} | grep ^${branch}$` ]]
+  then
+    # check if it is already checked out locally
+    if ! local_branch_exists ${branch_type} ${branch}
+    then
+      warning 'a branch with this name already exists, reopening'
+    else
+      warning 'this branch is already open'
+    fi
+  else
+    git branch "${normalized_branch}" "${PIPELINE["${branch_type}"]}" 1> /dev/null
+    info "new feature branch created: '${normalized_branch}'"
+  fi
+
+  git checkout "${normalized_branch}" &> /dev/null
 }
 
-if [[ -z $@ ]]
-then
+## push the given branch to the remote and delete the local branch
+##
+## $1 the type of branch
+## $3 the branch name
+##
+function branch_publish()
+{
+  local branch_type=$1
+  local branch=$2
+  local normalized_branch=`normalize_branch_name ${branch} ${branch_type}`
+
+  if ! local_branch_exists ${branch_type} ${branch}
+  then
+
+    if remote_branch_exists ${branch_type} ${branch}
+    then
+      error 'branch not found, but a remote branch with this name exists: already published?'
+    else
+      error 'branch not found'
+    fi
+
+    exit 1
+  fi
+
+  git push "${REMOTE}" "${normalized_branch}" &> /dev/null && \
+  { is_current_branch "${normalized_branch}" && git checkout "${PIPELINE["${branch_type}"]}" || true; } && \
+  git branch -D "${normalized_branch}" && \
+  info "branch '${normalized_branch}' published to '${REMOTE}'"
+}
+
+## update the local repository, integrating the remote modifications and purging the outdated references
+##
+function update()
+{
+  # 1. update the local references to the remote objects
+  # 2. update the production branch with the remote commits
+  # 3. rebase all local hotfix branches on the updated production branch
+  # 4. update the development branch with the remote commits
+  # 3. rebase all local feature branches on the updated development branch
+  git fetch --tags --prune && \
+  rebase_production_branch && \
+  rebase_all_branches ${PRODUCTION_BRANCH_PREFIX} 'local' && \
+  rebase_development_branch && \
+  rebase_all_branches ${DEVELOPMENT_BRANCH_PREFIX} 'local'
+}
+
+function print_usage()
+{
   cat << EOT
 Usage:
-  git rflow feature                    # list the feature branches
+  git rflow feature [--remote]         # list the feature branches
   git rflow feature start <branch>     # create a feature branch
-  git rflow feature delete <branch>    # delete the feature branch
   git rflow feature publish <branch>   # push the feature branch on the remote
   git rflow feature merge <branch>     # merge the feature branch in the development branch
-  git rflow hotfix                     # list the hotfix branches
+  git rflow hotfix [--remote]          # list the hotfix branches
   git rflow hotfix start <branch>      # create a hotfix branch
-  git rflow hotfix delete <branch>     # delete the hotfix branch
   git rflow hotfix publish <branch>    # push the hotfix branch on the remote
   git rflow hotfix merge <branch>      # merge the hotfix branch in the production branch
   git rflow update                     # rebase every branch on the production branch
 EOT
+}
 
+#------------------------------------------------------------------------------#
+# MAIN                                                                         #
+#------------------------------------------------------------------------------#
+
+if [[ -z $@ ]]
+then
+  print_usage
   exit 0
 fi
 
@@ -271,8 +406,10 @@ case $1 in
 
     case $1 in
       start) branch_start feature $2 ;;
+      publish) branch_publish feature $2 ;;
       merge) feature_merge $2 ;;
-      '') list_branches feature ;;
+      '') list_local_branches feature ;;
+      '--remote') list_branches feature ;;
       *) error "invalid argument '$1'" && exit 1 ;;
     esac
 
@@ -282,15 +419,18 @@ case $1 in
 
     case $1 in
       start) branch_start hotfix $2 ;;
+      publish) branch_publish hotfix $2 ;;
       merge) hotfix_merge $2 ;;
-      '') list_branches hotfix ;;
+      '') list_local_branches hotfix ;;
+      '--remote') list_branches hotfix ;;
       *) error "invalid argument '$1'" && exit 1 ;;
     esac
 
     ;;
   update)
     shift
-    ;;
+
+    update ;;
   *)
     error "invalid argument '$1'" && exit 1
     ;;
