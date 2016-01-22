@@ -1,16 +1,18 @@
 #!/bin/bash
 
 # read configuration
-REMOTE=`git config --get rflow.remote`
-DEVELOPMENT_BRANCH=`git config --get rflow.branch.development`
-PRODUCTION_BRANCH=`git config --get rflow.branch.production`
+REMOTE=`git config --local --get rflow.remote`
+DEVELOPMENT_BRANCH=`git config --local --get rflow.development.branch`
+PRODUCTION_BRANCH=`git config --local --get rflow.production.branch`
+DEVELOPMENT_PREFIX=`git config --local --get rflow.development.prefix`
+PRODUCTION_PREFIX=`git config --local --get rflow.production.prefix`
 
 # apply defaults
 REMOTE=${REMOTE:-origin}
 DEVELOPMENT_BRANCH=${DEVELOPMENT_BRANCH:-develop}
 PRODUCTION_BRANCH=${PRODUCTION_BRANCH:-master}
-DEVELOPMENT_BRANCH_PREFIX=${DEVELOPMENT_BRANCH_PREFIX:-feature}
-PRODUCTION_BRANCH_PREFIX=${PRODUCTION_BRANCH_PREFIX:-hotfix}
+DEVELOPMENT_PREFIX=${DEVELOPMENT_PREFIX:-feature}
+PRODUCTION_PREFIX=${PRODUCTION_PREFIX:-hotfix}
 
 # define output colors
 RED=`tput setaf 1`
@@ -19,7 +21,7 @@ YELLOW=`tput setaf 3`
 BLUE=`tput setaf 4`
 NO_COLOR=`tput sgr0`
 
-declare -A PIPELINE=( ["${DEVELOPMENT_BRANCH_PREFIX}"]="${DEVELOPMENT_BRANCH}" ["${PRODUCTION_BRANCH_PREFIX}"]="${PRODUCTION_BRANCH}" )
+declare -A PIPELINE=( ["${DEVELOPMENT_PREFIX}"]="${DEVELOPMENT_BRANCH}" ["${PRODUCTION_PREFIX}"]="${PRODUCTION_BRANCH}" )
 
 # define print functions
 function warning()
@@ -253,8 +255,8 @@ function feature_merge()
 {
   local branch=$1
 
-  branch_merge_validate ${branch} ${DEVELOPMENT_BRANCH} ${DEVELOPMENT_BRANCH_PREFIX} && \
-  branch_merge `normalize_branch_name "${branch}" "${DEVELOPMENT_BRANCH_PREFIX}"` ${DEVELOPMENT_BRANCH_PREFIX} && \
+  branch_merge_validate ${branch} ${DEVELOPMENT_BRANCH} ${DEVELOPMENT_PREFIX} && \
+  branch_merge `normalize_branch_name "${branch}" "${DEVELOPMENT_PREFIX}"` ${DEVELOPMENT_PREFIX} && \
   success "branch '${branch}' merged with '${DEVELOPMENT_BRANCH}'"
 }
 
@@ -287,10 +289,10 @@ function hotfix_merge()
 {
   local branch=$1
 
-  branch_merge_validate ${branch} ${PRODUCTION_BRANCH} ${PRODUCTION_BRANCH_PREFIX} && \
-  branch_merge `normalize_branch_name "${branch}" "${PRODUCTION_BRANCH_PREFIX}"` ${PRODUCTION_BRANCH_PREFIX} && \
+  branch_merge_validate ${branch} ${PRODUCTION_BRANCH} ${PRODUCTION_PREFIX} && \
+  branch_merge `normalize_branch_name "${branch}" "${PRODUCTION_PREFIX}"` ${PRODUCTION_PREFIX} && \
   rebase_development_branch && \
-  rebase_all_branches ${DEVELOPMENT_BRANCH_PREFIX} 'remote' && \
+  rebase_all_branches ${DEVELOPMENT_PREFIX} 'remote' && \
   success "branch '${branch}' merged with '${DEVELOPMENT_BRANCH}'"
 }
 
@@ -369,9 +371,33 @@ function update()
   # 3. rebase all local feature branches on the updated development branch
   git fetch --tags --prune && \
   rebase_production_branch && \
-  rebase_all_branches ${PRODUCTION_BRANCH_PREFIX} 'local' && \
+  rebase_all_branches ${PRODUCTION_PREFIX} 'local' && \
   rebase_development_branch && \
-  rebase_all_branches ${DEVELOPMENT_BRANCH_PREFIX} 'local'
+  rebase_all_branches ${DEVELOPMENT_PREFIX} 'local'
+}
+
+function print_status()
+{
+  local features=(`list_branches feature`)
+  local hotfixes=(`list_branches hotfix`)
+
+  cat << EOT
+
+${GREEN}*${NO_COLOR} Remote:                      ${BLUE}${REMOTE}${NO_COLOR}
+${GREEN}*${NO_COLOR} Development branch (prefix): ${BLUE}${DEVELOPMENT_BRANCH}${NO_COLOR} (${BLUE}${DEVELOPMENT_PREFIX}${NO_COLOR}/*)
+${GREEN}*${NO_COLOR} Production branch (prefix):  ${BLUE}${PRODUCTION_BRANCH}${NO_COLOR} (${BLUE}${PRODUCTION_PREFIX}${NO_COLOR}/*)
+${GREEN}*${NO_COLOR} Open features: `[[ ${#features[*]} -gt 0 ]] && echo ${BLUE}${#features[*]} || echo ${YELLOW}none`${NO_COLOR}
+`printf "  ${GREEN}-${NO_COLOR} %s\n" "${features[@]}"`
+${GREEN}*${NO_COLOR} Open hotfixes: `[[ ${#hotfixes[*]} -gt 0 ]] && echo ${BLUE}${#hotfixes[*]} || echo ${YELLOW}none`${NO_COLOR}
+`printf "  ${GREEN}-${NO_COLOR} %s\n" "${hotfixes[*]}"`
+
+Workflow configuration:
+git config --local rflow.remote {remote_name}
+git config --local rflow.development.branch {branch_name}
+git config --local rflow.development.prefix {prefix_name}
+git config --local rflow.production.branch {branch_name}
+git config --local rflow.production.prefix {prefix_name}
+EOT
 }
 
 function print_usage()
@@ -387,6 +413,7 @@ Usage:
   git rflow hotfix publish <branch>    # push the hotfix branch on the remote
   git rflow hotfix merge <branch>      # merge the hotfix branch in the production branch
   git rflow update                     # rebase every branch on the production branch
+  git rflow status                     # print the current repository status from the rflow perspective
 EOT
 }
 
@@ -401,7 +428,13 @@ then
 fi
 
 case $1 in
+
+  status)
+
+    print_status ;;
+
   feature)
+
     shift
 
     case $1 in
@@ -414,7 +447,9 @@ case $1 in
     esac
 
     ;;
+
   hotfix)
+
     shift
 
     case $1 in
@@ -427,10 +462,11 @@ case $1 in
     esac
 
     ;;
+
   update)
-    shift
 
     update ;;
+
   *)
     error "invalid argument '$1'" && exit 1
     ;;
