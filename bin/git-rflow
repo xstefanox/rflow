@@ -48,6 +48,26 @@ function success()
   echo ${NO_COLOR}
 }
 
+## check if the given item is found in the given array
+##
+## $1 the item
+## $@ the array
+##
+function array_contains()
+{
+  local item=$1
+  shift
+  local array=$@
+  local e
+
+  for e in ${array[@]}
+  do
+    [[ "${e}" == "${item}" ]] && return 0
+  done
+
+  return 1
+}
+
 ## list all the remote branches of the given type
 ##
 ## $1 the type of branches to list, expressed using one of the configured prefixes
@@ -201,6 +221,7 @@ function branch_merge()
 ## perform a multiple rebase of all the branches of the given type on their own pipeline branch
 ##
 ## $1 the type of branches that will be rebased on their own pipeline branch
+## $2 'local' to rebase only local branches, 'remote' to rebase all branches (default)
 ##
 function rebase_all_branches()
 {
@@ -333,7 +354,7 @@ function branch_start()
 ## push the given branch to the remote and delete the local branch
 ##
 ## $1 the type of branch
-## $3 the branch name
+## $2 the branch name
 ##
 function branch_publish()
 {
@@ -376,20 +397,51 @@ function update()
   rebase_all_branches ${DEVELOPMENT_PREFIX} 'local'
 }
 
+## print all the branches of the given type, indicating wheter they are currently checked out locally
+##
+## $1 the type of branches
+##
+function print_branches()
+{
+  local branch_type=$1
+  local branches=`[[ "${branch_type}" == ${PRODUCTION_PREFIX} ]] && list_branches feature || list_branches hotfix`
+  local local_branches=`[[ "${branch_type}" == ${PRODUCTION_PREFIX} ]] && list_local_branches feature || list_local_branches hotfix`
+  local branch
+
+  for branch in ${branches[@]}
+  do
+    echo "${branch}   $(array_contains ${branch} ${local_branches[@]} && echo "${BLUE}you are working on this${NO_COLOR}")"
+  done
+}
+
+## print the current status of the project
+##
 function print_status()
 {
   local features=(`list_branches feature`)
   local hotfixes=(`list_branches hotfix`)
+  local local_features=(`list_local_branches feature`)
+  local local_hotfixes=(`list_local_branches hotfix`)
 
   cat << EOT
 
 ${GREEN}*${NO_COLOR} Remote:                      ${BLUE}${REMOTE}${NO_COLOR}
 ${GREEN}*${NO_COLOR} Development branch (prefix): ${BLUE}${DEVELOPMENT_BRANCH}${NO_COLOR} (${BLUE}${DEVELOPMENT_PREFIX}${NO_COLOR}/*)
 ${GREEN}*${NO_COLOR} Production branch (prefix):  ${BLUE}${PRODUCTION_BRANCH}${NO_COLOR} (${BLUE}${PRODUCTION_PREFIX}${NO_COLOR}/*)
-${GREEN}*${NO_COLOR} Open features: `[[ ${#features[*]} -gt 0 ]] && echo ${BLUE}${#features[*]} || echo ${YELLOW}none`${NO_COLOR}
-`printf "  ${GREEN}-${NO_COLOR} %s\n" "${features[@]}"`
-${GREEN}*${NO_COLOR} Open hotfixes: `[[ ${#hotfixes[*]} -gt 0 ]] && echo ${BLUE}${#hotfixes[*]} || echo ${YELLOW}none`${NO_COLOR}
-`printf "  ${GREEN}-${NO_COLOR} %s\n" "${hotfixes[*]}"`
+${GREEN}*${NO_COLOR} Open features: `[[ ${#features[@]} -gt 0 ]] && echo ${BLUE}${#features[@]} || echo ${YELLOW}none`${NO_COLOR}
+`
+  for branch in ${features[@]}
+  do
+    echo "  ${GREEN}-${NO_COLOR} ${branch} $(array_contains ${branch} ${local_features[@]} && echo "(${BLUE}you are working on this${NO_COLOR})")"
+  done
+`
+${GREEN}*${NO_COLOR} Open hotfixes: `[[ ${#hotfixes[@]} -gt 0 ]] && echo ${BLUE}${#hotfixes[@]} || echo ${YELLOW}none`${NO_COLOR}
+`
+  for branch in ${hotfixes[@]}
+  do
+    echo "  ${GREEN}-${NO_COLOR} ${branch} $(array_contains ${branch} ${local_hotfixes[@]} && echo "(${BLUE}you are working on this${NO_COLOR})")"
+  done
+`
 
 Workflow configuration:
 git config --local rflow.remote {remote_name}
@@ -441,8 +493,7 @@ case $1 in
       start) branch_start feature $2 ;;
       publish) branch_publish feature $2 ;;
       merge) feature_merge $2 ;;
-      '') list_local_branches feature ;;
-      '--remote') list_branches feature ;;
+      '') print_branches feature ;;
       *) error "invalid argument '$1'" && exit 1 ;;
     esac
 
@@ -456,8 +507,7 @@ case $1 in
       start) branch_start hotfix $2 ;;
       publish) branch_publish hotfix $2 ;;
       merge) hotfix_merge $2 ;;
-      '') list_local_branches hotfix ;;
-      '--remote') list_branches hotfix ;;
+      '') print_branches hotfix ;;
       *) error "invalid argument '$1'" && exit 1 ;;
     esac
 
