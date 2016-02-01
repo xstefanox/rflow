@@ -404,8 +404,8 @@ function update()
 function print_branches()
 {
   local branch_type=$1
-  local branches=`[[ "${branch_type}" == ${PRODUCTION_PREFIX} ]] && list_branches feature || list_branches hotfix`
-  local local_branches=`[[ "${branch_type}" == ${PRODUCTION_PREFIX} ]] && list_local_branches feature || list_local_branches hotfix`
+  local branches=`[[ "${branch_type}" == ${PRODUCTION_PREFIX} ]] && list_branches hotfix || list_branches feature`
+  local local_branches=`[[ "${branch_type}" == ${PRODUCTION_PREFIX} ]] && list_local_branches hotfix || list_local_branches feature`
   local branch
 
   for branch in ${branches[@]}
