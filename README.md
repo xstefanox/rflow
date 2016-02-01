@@ -18,3 +18,13 @@ On the contrary, rflow aims to maintain a simple, linear commit graph, ensuring 
 
 To achieve this goal, rflow makes heavy use of the rebase feature, always avoiding three-way commit merging and operating on local and remote branches at the same time.
 Feature and hotfix branches and thus recursively rebased on their corresponding main branch.
+
+### Installation
+
+Checkout this repository somewhere into your home directory (suggested path: `~/.local/opt/rflow`, to avoid cluttering the system):
+
+```
+git clone https://github.com/xstefanox/rflow
+```
+
+Link the `git-rflow` binary from a place into your configured `PATH` (most distributions come with the `~/bin` or `~/.local/bin` directories already configured in the `PATH`).
