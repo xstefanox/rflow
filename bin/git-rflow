@@ -360,7 +360,9 @@ function branch_publish()
 {
   local branch_type=$1
   local branch=$2
+  local force=$3
   local normalized_branch=`normalize_branch_name ${branch} ${branch_type}`
+  local forced_push=''
 
   if ! local_branch_exists ${branch_type} ${branch}
   then
@@ -372,13 +374,31 @@ function branch_publish()
       error 'branch not found'
     fi
 
-    exit 1
-  fi
+  else
 
-  git push "${REMOTE}" "${normalized_branch}" &> /dev/null && \
-  { is_current_branch "${normalized_branch}" && git checkout "${PIPELINE["${branch_type}"]}" || true; } && \
-  git branch -D "${normalized_branch}" && \
-  info "branch '${normalized_branch}' published to '${REMOTE}'"
+    if remote_branch_exists ${branch_type} ${branch}
+    then
+
+      # if the remote branch is not an ancestor of the local one, then the two branched have diverged
+      if ! `git merge-base --is-ancestor "${REMOTE}/${normalized_branch}" "${normalized_branch}"`
+      then
+        # ask for a forced push
+        if [[ $force != true ]]
+        then
+          error 'local and remote branches have diverged, forced push is required'
+          exit 1
+        else
+          forced_push='--force'
+        fi
+      fi
+    fi
+
+    git push $forced_push "${REMOTE}" "${normalized_branch}" &> /dev/null && \
+    { is_current_branch "${normalized_branch}" && git checkout "${PIPELINE["${branch_type}"]}" || true; } && \
+    git branch -D "${normalized_branch}" && \
+    info "branch '${normalized_branch}' published to '${REMOTE}'"
+
+  fi
 }
 
 ## update the local repository, integrating the remote modifications and purging the outdated references
@@ -491,7 +511,7 @@ case $1 in
 
     case $1 in
       start) branch_start feature $2 ;;
-      publish) branch_publish feature $2 ;;
+      publish) branch_publish feature $2 `[[ $3 == '-f' || $3 == '--force' ]] && echo true`;;
       merge) feature_merge $2 ;;
       '') print_branches feature ;;
       *) error "invalid argument '$1'" && exit 1 ;;
@@ -505,7 +525,7 @@ case $1 in
 
     case $1 in
       start) branch_start hotfix $2 ;;
-      publish) branch_publish hotfix $2 ;;
+      publish) branch_publish hotfix $2 `[[ $3 == '-f' || $3 == '--force' ]] && echo true`;;
       merge) hotfix_merge $2 ;;
       '') print_branches hotfix ;;
       *) error "invalid argument '$1'" && exit 1 ;;
