@@ -344,6 +344,14 @@ function branch_start()
       warning 'this branch is already open'
     fi
   else
+
+    # check if the pipeline branch that is to be forked exists locally
+    if [[ -z `git for-each-ref --format='%(refname)' "refs/heads/${PIPELINE["${branch_type}"]}"` ]]
+    then
+      warning "pipeline branch ${PIPELINE["${branch_type}"]} not found, checking out"
+      git checkout "${PIPELINE["${branch_type}"]}" &> /dev/null
+    fi
+
     git branch "${normalized_branch}" "${PIPELINE["${branch_type}"]}" 1> /dev/null
     info "new feature branch created: '${normalized_branch}'"
   fi
